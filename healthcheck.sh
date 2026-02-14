@@ -3,7 +3,7 @@ set -uo pipefail
 
 # homelab-healthcheck — Outputs JSON health report to stdout
 # https://github.com/wickkit/homelab-healthcheck
-VERSION="0.4.0"
+VERSION="0.5.0"
 
 # ─── Configuration (defaults, overridden by config file) ─────────────────────
 
@@ -155,8 +155,11 @@ check_smart() {
         dev=$(echo "$dev" | awk '{print $1}')
         [[ -z "$dev" ]] && continue
 
+        local smart_output
+        smart_output=$(sudo smartctl -a "$dev" 2>/dev/null)
+
         local health
-        health=$(sudo smartctl --health "$dev" 2>/dev/null | grep -i "result\|status" | head -1 | sed 's/.*: *//')
+        health=$(echo "$smart_output" | grep -i "result\|SMART Health Status" | head -1 | sed 's/.*: *//')
         local status="ok"
         if [[ -z "$health" ]]; then
             health="unknown"
@@ -164,8 +167,41 @@ check_smart() {
             status="critical"; escalate critical
         fi
 
-        drives=$(echo "$drives" | jq --arg dev "$dev" --arg health "$health" --arg status "$status" \
-            '. + [{"device":$dev,"health":$health,"status":$status}]')
+        # Extract key SMART attributes
+        local temp realloc pending uncorrectable power_on model serial
+        temp=$(echo "$smart_output" | grep -i "Temperature_Celsius" | awk '{print $10}' | cut -d'(' -f1)
+        realloc=$(echo "$smart_output" | grep "Reallocated_Sector_Ct" | awk '{print $10}')
+        pending=$(echo "$smart_output" | grep "Current_Pending_Sector" | awk '{print $10}')
+        uncorrectable=$(echo "$smart_output" | grep "Offline_Uncorrectable" | awk '{print $10}')
+        power_on=$(echo "$smart_output" | grep "Power_On_Hours" | awk '{print $10}')
+        model=$(echo "$smart_output" | grep "Device Model" | sed 's/.*: *//')
+        serial=$(echo "$smart_output" | grep "Serial Number" | sed 's/.*: *//')
+
+        # Warn on concerning SMART values
+        if [[ -n "$realloc" ]] && (( realloc > 0 )); then
+            status="warning"; escalate warning
+        fi
+        if [[ -n "$pending" ]] && (( pending > 0 )); then
+            status="warning"; escalate warning
+        fi
+        if [[ -n "$temp" ]] && (( temp >= 55 )); then
+            status="warning"; escalate warning
+        fi
+
+        drives=$(echo "$drives" | jq \
+            --arg dev "$dev" --arg health "$health" --arg status "$status" \
+            --arg model "${model:-unknown}" --arg serial "${serial:-unknown}" \
+            --argjson temp "${temp:-null}" \
+            --argjson realloc "${realloc:-null}" \
+            --argjson pending "${pending:-null}" \
+            --argjson uncorrectable "${uncorrectable:-null}" \
+            --argjson power_on_hours "${power_on:-null}" \
+            '. + [{
+                "device":$dev, "model":$model, "serial":$serial, "health":$health,
+                "temperature_c":$temp, "reallocated_sectors":$realloc,
+                "pending_sectors":$pending, "uncorrectable_sectors":$uncorrectable,
+                "power_on_hours":$power_on_hours, "status":$status
+            }]')
     done < <(sudo smartctl --scan 2>/dev/null | grep -v "^#")
 
     echo "$drives"
