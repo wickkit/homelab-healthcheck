@@ -1,0 +1,116 @@
+{
+  "status": "warning",
+  "timestamp": "2026-02-14T12:00:00Z",
+  "hostname": "nas",
+  "checks": {
+    "disk": [
+      {
+        "filesystem": "/dev/sda1",
+        "mount": "/",
+        "size": "50G",
+        "used": "22G",
+        "available": "26G",
+        "use_percent": 44,
+        "status": "ok"
+      },
+      {
+        "filesystem": "/dev/sdb1",
+        "mount": "/mnt/data",
+        "size": "4.0T",
+        "used": "3.3T",
+        "available": "700G",
+        "use_percent": 82,
+        "status": "warning"
+      }
+    ],
+    "smart": [
+      {
+        "device": "/dev/sda",
+        "health": "PASSED",
+        "status": "ok"
+      },
+      {
+        "device": "/dev/sdb",
+        "health": "PASSED",
+        "status": "ok"
+      }
+    ],
+    "docker": {
+      "available": true,
+      "total": 8,
+      "running": 7,
+      "status": "warning",
+      "containers": [
+        {
+          "name": "portainer",
+          "state": "running",
+          "health": "healthy",
+          "restart_count": 0,
+          "image": "portainer/portainer-ce:latest",
+          "status": "ok"
+        },
+        {
+          "name": "plex",
+          "state": "running",
+          "health": "none",
+          "restart_count": 0,
+          "image": "plexinc/pms-docker:latest",
+          "status": "ok"
+        },
+        {
+          "name": "nginx",
+          "state": "exited",
+          "health": "none",
+          "restart_count": 5,
+          "image": "nginx:latest",
+          "status": "warning"
+        }
+      ]
+    },
+    "resources": {
+      "cpu": {
+        "cores": 4,
+        "load_1m": 0.52,
+        "load_5m": 0.38,
+        "load_15m": 0.41,
+        "status": "ok"
+      },
+      "memory": {
+        "total": "15.6G",
+        "available": "4.2G",
+        "used_percent": 73,
+        "status": "ok"
+      },
+      "swap": {
+        "used_percent": 12,
+        "status": "ok"
+      }
+    },
+    "updates": {
+      "pending": 14,
+      "security": 0,
+      "status": "warning"
+    },
+    "uptime": {
+      "seconds": 1728000,
+      "human": "20d 0h 0m"
+    },
+    "zfs": {
+      "available": false
+    },
+    "raid": {
+      "available": false
+    },
+    "network": {
+      "dns_resolution": true,
+      "gateway_reachable": true,
+      "status": "ok"
+    },
+    "logs": {
+      "since": "2026-02-13T12:00:00Z",
+      "count": 0,
+      "status": "ok",
+      "entries": []
+    }
+  }
+}
