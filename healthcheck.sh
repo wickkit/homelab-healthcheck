@@ -3,6 +3,7 @@ set -uo pipefail
 
 # homelab-healthcheck — Outputs JSON health report to stdout
 # https://github.com/wickkit/homelab-healthcheck
+VERSION="0.2.0"
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -95,37 +96,36 @@ check_docker() {
         return
     fi
 
-    local containers="[]"
     local section_status="ok"
 
-    while IFS=$'\t' read -r name state health restarts image; do
-        [[ -z "$name" ]] && continue
-        local cstatus="ok"
+    # Use docker inspect for reliable structured data (avoids text parsing bugs)
+    local raw
+    raw=$(docker inspect $(docker ps -aq) 2>/dev/null) || raw="[]"
 
-        if [[ "$state" != "running" ]]; then
-            cstatus="warning"; escalate warning; section_status="warning"
-        fi
-        if [[ "$health" == "unhealthy" ]]; then
-            cstatus="warning"; escalate warning; section_status="warning"
-        fi
-        # Sanitize restarts to integer
-        restarts="${restarts//[!0-9]/}"
-        restarts="${restarts:-0}"
-        if (( restarts >= DOCKER_RESTART_WARN )); then
-            cstatus="warning"; escalate warning; section_status="warning"
-        fi
+    local containers
+    containers=$(echo "$raw" | jq -r --argjson warn "$DOCKER_RESTART_WARN" '
+        [.[] | {
+            name: .Name[1:],
+            state: .State.Status,
+            health: (if .State.Health then .State.Health.Status else "none" end),
+            restart_count: .RestartCount,
+            image: .Config.Image,
+            status: (
+                if .State.Status != "running" then "warning"
+                elif (.State.Health and .State.Health.Status == "unhealthy") then "warning"
+                elif .RestartCount >= $warn then "warning"
+                else "ok"
+                end
+            )
+        }]
+    ')
 
-        containers=$(echo "$containers" | jq \
-            --arg name "$name" --arg state "$state" --arg health "${health:-none}" \
-            --argjson restarts "${restarts:-0}" --arg image "$image" --arg status "$cstatus" \
-            '. + [{"name":$name,"state":$state,"health":$health,"restart_count":$restarts,"image":$image,"status":$status}]')
-    done < <(docker ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}' 2>/dev/null | while IFS=$'\t' read -r n s st i; do
-        health=""
-        [[ "$st" =~ \(healthy\) ]] && health="healthy"
-        [[ "$st" =~ \(unhealthy\) ]] && health="unhealthy"
-        restarts=$(docker inspect --format='{{.RestartCount}}' "$n" 2>/dev/null || echo "0")
-        printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$s" "$health" "$restarts" "$i"
-    done)
+    # Determine section status
+    local warn_count
+    warn_count=$(echo "$containers" | jq '[.[] | select(.status != "ok")] | length')
+    if (( warn_count > 0 )); then
+        section_status="warning"; escalate warning
+    fi
 
     local total running
     total=$(echo "$containers" | jq 'length')
@@ -368,7 +368,9 @@ jq -n \
     --argjson raid "$raid" \
     --argjson network "$network" \
     --argjson logs "$logs" \
+    --arg version "$VERSION" \
     '{
+        "version": $version,
         "status": $status,
         "timestamp": $timestamp,
         "hostname": $hostname,
