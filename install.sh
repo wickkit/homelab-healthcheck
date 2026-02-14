@@ -97,7 +97,7 @@ info "Installing healthcheck script to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
 # Find source directory (handles both clone and curl|bash)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/healthcheck.sh" ]]; then
     cp "$SCRIPT_DIR/healthcheck.sh" "$INSTALL_DIR/healthcheck.sh"
     cp "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
