@@ -101,11 +101,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/healthcheck.sh" ]]; then
     cp "$SCRIPT_DIR/healthcheck.sh" "$INSTALL_DIR/healthcheck.sh"
     cp "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
+    cp "$SCRIPT_DIR/config.env.example" "$INSTALL_DIR/config.env.example" 2>/dev/null || true
 else
     # Download from GitHub if running via curl|bash
     info "Downloading healthcheck.sh from GitHub..."
     curl -fsSL "https://raw.githubusercontent.com/wickkit/homelab-healthcheck/main/healthcheck.sh" -o "$INSTALL_DIR/healthcheck.sh"
     curl -fsSL "https://raw.githubusercontent.com/wickkit/homelab-healthcheck/main/uninstall.sh" -o "$INSTALL_DIR/uninstall.sh"
+    curl -fsSL "https://raw.githubusercontent.com/wickkit/homelab-healthcheck/main/config.env.example" -o "$INSTALL_DIR/config.env.example"
+fi
+
+# Create default config if none exists
+if [[ ! -f "$INSTALL_DIR/config.env" ]]; then
+    cp "$INSTALL_DIR/config.env.example" "$INSTALL_DIR/config.env"
+    ok "Default config created at $INSTALL_DIR/config.env"
 fi
 
 chmod 755 "$INSTALL_DIR/healthcheck.sh"

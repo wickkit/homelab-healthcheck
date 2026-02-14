@@ -3,9 +3,9 @@ set -uo pipefail
 
 # homelab-healthcheck — Outputs JSON health report to stdout
 # https://github.com/wickkit/homelab-healthcheck
-VERSION="0.2.0"
+VERSION="0.3.0"
 
-# ─── Configuration ───────────────────────────────────────────────────────────
+# ─── Configuration (defaults, overridden by config file) ─────────────────────
 
 DISK_WARN_PCT=80
 DISK_CRIT_PCT=90
@@ -15,7 +15,17 @@ SWAP_WARN_PCT=50
 LOAD_WARN_MULTIPLIER=1
 DOCKER_RESTART_WARN=3
 STATE_DIR="/var/lib/homelab-healthcheck"
+INSTALL_DIR="/opt/homelab-healthcheck"
+CONFIG_FILE="${INSTALL_DIR}/config.env"
+
+# Load config overrides if present
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
 LAST_CHECK_FILE="$STATE_DIR/last_check"
+HISTORY_DIR="$STATE_DIR/history"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -351,10 +361,11 @@ logs=$(check_logs)
 
 # Save timestamp for next log check
 mkdir -p "$STATE_DIR" 2>/dev/null
+mkdir -p "$HISTORY_DIR" 2>/dev/null
 echo "$timestamp" > "$LAST_CHECK_FILE" 2>/dev/null || true
 
 # Assemble final JSON
-jq -n \
+output=$(jq -n \
     --arg status "$overall_status" \
     --arg timestamp "$timestamp" \
     --arg hostname "$hostname" \
@@ -386,4 +397,14 @@ jq -n \
             "network": $network,
             "logs": $logs
         }
-    }'
+    }')
+
+# Save to history
+local_date=$(date +"%Y-%m-%d")
+echo "$output" > "$HISTORY_DIR/${local_date}.json" 2>/dev/null || true
+
+# Prune history older than 90 days
+find "$HISTORY_DIR" -name "*.json" -mtime +90 -delete 2>/dev/null || true
+
+# Output to stdout
+echo "$output"
