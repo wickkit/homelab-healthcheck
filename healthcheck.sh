@@ -3,7 +3,7 @@ set -uo pipefail
 
 # homelab-healthcheck — Outputs JSON health report to stdout
 # https://github.com/wickkit/homelab-healthcheck
-VERSION="0.3.0"
+VERSION="0.4.0"
 
 # ─── Configuration (defaults, overridden by config file) ─────────────────────
 
@@ -42,6 +42,77 @@ escalate() {
 
 json_escape() {
     python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip()))"
+}
+
+# Calculate disk usage trends from history
+check_disk_trends() {
+    local current_disks="$1"
+    local trends="[]"
+    local history_files=()
+
+    # Gather last 7 days of history
+    for i in $(seq 1 7); do
+        local d
+        d=$(date -d "$i days ago" +"%Y-%m-%d" 2>/dev/null || date -v-"${i}d" +"%Y-%m-%d" 2>/dev/null)
+        [[ -n "$d" && -f "$HISTORY_DIR/${d}.json" ]] && history_files+=("$HISTORY_DIR/${d}.json")
+    done
+
+    # Need at least 2 days of history for trends
+    if (( ${#history_files[@]} < 2 )); then
+        echo '[]'
+        return
+    fi
+
+    # For each current mount, calculate growth rate
+    local mounts
+    mounts=$(echo "$current_disks" | jq -r '.[].mount')
+
+    while IFS= read -r mount; do
+        [[ -z "$mount" ]] && continue
+        local current_pct
+        current_pct=$(echo "$current_disks" | jq -r --arg m "$mount" '.[] | select(.mount==$m) | .use_percent')
+
+        # Get oldest available historical value for this mount
+        local oldest_pct="" oldest_days=0
+        for f in "${history_files[@]}"; do
+            local hist_pct
+            hist_pct=$(jq -r --arg m "$mount" '.checks.disk[] | select(.mount==$m) | .use_percent' "$f" 2>/dev/null)
+            if [[ -n "$hist_pct" && "$hist_pct" != "null" ]]; then
+                oldest_pct="$hist_pct"
+                oldest_days=$(( oldest_days + 1 ))
+            fi
+        done
+
+        if [[ -z "$oldest_pct" || "$oldest_days" -lt 2 ]]; then
+            continue
+        fi
+
+        # Calculate daily growth rate
+        local growth_per_day days_until_full=-1
+        growth_per_day=$(awk "BEGIN {printf \"%.2f\", ($current_pct - $oldest_pct) / $oldest_days}")
+
+        # Project days until full (only if growing)
+        if (( $(awk "BEGIN {print ($growth_per_day > 0.01) ? 1 : 0}") )); then
+            days_until_full=$(awk "BEGIN {printf \"%d\", (100 - $current_pct) / $growth_per_day}")
+        fi
+
+        local trend_status="ok"
+        if (( days_until_full > 0 && days_until_full <= 14 )); then
+            trend_status="critical"; escalate warning
+        elif (( days_until_full > 0 && days_until_full <= 30 )); then
+            trend_status="warning"; escalate warning
+        fi
+
+        trends=$(echo "$trends" | jq \
+            --arg mount "$mount" \
+            --argjson current "$current_pct" \
+            --arg growth "$growth_per_day" \
+            --argjson days_until_full "$days_until_full" \
+            --arg status "$trend_status" \
+            '. + [{"mount":$mount,"current_percent":$current,"growth_per_day":($growth|tonumber),"days_until_full":$days_until_full,"status":$status}]')
+    done <<< "$mounts"
+
+    echo "$trends"
 }
 
 # ─── Checks ──────────────────────────────────────────────────────────────────
@@ -349,6 +420,7 @@ hostname=$(hostname)
 
 # Run all checks
 disk=$(check_disk)
+disk_trends=$(check_disk_trends "$disk")
 smart=$(check_smart)
 docker_info=$(check_docker)
 resources=$(check_resources)
@@ -370,6 +442,7 @@ output=$(jq -n \
     --arg timestamp "$timestamp" \
     --arg hostname "$hostname" \
     --argjson disk "$disk" \
+    --argjson disk_trends "$disk_trends" \
     --argjson smart "$smart" \
     --argjson docker "$docker_info" \
     --argjson resources "$resources" \
@@ -387,6 +460,7 @@ output=$(jq -n \
         "hostname": $hostname,
         "checks": {
             "disk": $disk,
+            "disk_trends": $disk_trends,
             "smart": $smart,
             "docker": $docker,
             "resources": $resources,
