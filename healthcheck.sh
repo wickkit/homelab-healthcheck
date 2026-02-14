@@ -108,7 +108,10 @@ check_docker() {
         if [[ "$health" == "unhealthy" ]]; then
             cstatus="warning"; escalate warning; section_status="warning"
         fi
-        if [[ -n "$restarts" ]] && (( restarts >= DOCKER_RESTART_WARN )); then
+        # Sanitize restarts to integer
+        restarts="${restarts//[!0-9]/}"
+        restarts="${restarts:-0}"
+        if (( restarts >= DOCKER_RESTART_WARN )); then
             cstatus="warning"; escalate warning; section_status="warning"
         fi
 
