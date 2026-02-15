@@ -3,7 +3,7 @@ set -uo pipefail
 
 # homelab-healthcheck — Outputs JSON health report to stdout
 # https://github.com/wickkit/homelab-healthcheck
-VERSION="0.6.0"
+VERSION="0.7.0"
 
 # ─── Configuration (defaults, overridden by config file) ─────────────────────
 
@@ -14,6 +14,9 @@ MEM_CRIT_PCT=95
 SWAP_WARN_PCT=50
 LOAD_WARN_MULTIPLIER=1
 DOCKER_RESTART_WARN=3
+CERT_WARN_DAYS=14
+CERT_CRIT_DAYS=7
+CERT_DOMAINS=""
 STATE_DIR="/var/lib/homelab-healthcheck"
 INSTALL_DIR="/opt/homelab-healthcheck"
 CONFIG_FILE="${INSTALL_DIR}/config.env"
@@ -452,6 +455,57 @@ check_network() {
         '{"dns_resolution":$dns,"gateway_reachable":$gateway,"internet":$internet,"services":$services,"status":$status}'
 }
 
+check_certs() {
+    local domains=()
+    local certs="[]"
+    local section_status="ok"
+
+    # Use configured domains or auto-discover from Traefik
+    if [[ -n "$CERT_DOMAINS" ]]; then
+        read -ra domains <<< "$CERT_DOMAINS"
+    elif command -v docker &>/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -q traefik; then
+        while IFS= read -r domain; do
+            [[ -n "$domain" ]] && domains+=("$domain")
+        done < <(docker exec traefik cat /etc/traefik/acme.json 2>/dev/null | jq -r '.[]?.Certificates[]?.domain.main // empty' 2>/dev/null)
+    fi
+
+    if (( ${#domains[@]} == 0 )); then
+        echo '{"available":false}'
+        return
+    fi
+
+    for domain in "${domains[@]}"; do
+        local expiry_date expiry_epoch now_epoch days_left cert_status="ok"
+
+        expiry_date=$(echo | timeout 5 openssl s_client -servername "$domain" -connect "$domain:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+
+        if [[ -z "$expiry_date" ]]; then
+            cert_status="warning"; escalate warning; section_status="warning"
+            certs=$(echo "$certs" | jq --arg domain "$domain" --arg status "$cert_status" \
+                '. + [{"domain":$domain,"error":"could not connect","status":$status}]')
+            continue
+        fi
+
+        expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null || date -jf "%b %d %T %Y %Z" "$expiry_date" +%s 2>/dev/null)
+        now_epoch=$(date +%s)
+        days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+
+        if (( days_left <= CERT_CRIT_DAYS )); then
+            cert_status="critical"; escalate critical; section_status="critical"
+        elif (( days_left <= CERT_WARN_DAYS )); then
+            cert_status="warning"; escalate warning; section_status="warning"
+        fi
+
+        certs=$(echo "$certs" | jq \
+            --arg domain "$domain" --arg expiry "$expiry_date" \
+            --argjson days_left "$days_left" --arg status "$cert_status" \
+            '. + [{"domain":$domain,"expiry":$expiry,"days_left":$days_left,"status":$status}]')
+    done
+
+    jq -n --argjson certs "$certs" --arg status "$section_status" \
+        '{"available":true,"status":$status,"certificates":$certs}'
+}
+
 check_logs() {
     local since="24 hours ago"
     if [[ -f "$LAST_CHECK_FILE" ]]; then
@@ -498,6 +552,7 @@ uptime_info=$(check_uptime)
 zfs=$(check_zfs)
 raid=$(check_raid)
 network=$(check_network)
+certs=$(check_certs)
 logs=$(check_logs)
 
 # Save timestamp for next log check
@@ -520,6 +575,7 @@ output=$(jq -n \
     --argjson zfs "$zfs" \
     --argjson raid "$raid" \
     --argjson network "$network" \
+    --argjson certs "$certs" \
     --argjson logs "$logs" \
     --arg version "$VERSION" \
     '{
@@ -538,6 +594,7 @@ output=$(jq -n \
             "zfs": $zfs,
             "raid": $raid,
             "network": $network,
+            "certificates": $certs,
             "logs": $logs
         }
     }')
