@@ -3,7 +3,7 @@ set -uo pipefail
 
 # homelab-healthcheck — Outputs JSON health report to stdout
 # https://github.com/wickkit/homelab-healthcheck
-VERSION="0.5.0"
+VERSION="0.6.0"
 
 # ─── Configuration (defaults, overridden by config file) ─────────────────────
 
@@ -399,7 +399,7 @@ check_raid() {
 }
 
 check_network() {
-    local dns_ok=false gateway_ok=false status="ok"
+    local dns_ok=false gateway_ok=false internet_ok=false status="ok"
 
     if host -W 3 google.com &>/dev/null 2>&1 || nslookup google.com &>/dev/null 2>&1; then
         dns_ok=true
@@ -411,12 +411,45 @@ check_network() {
         gateway_ok=true
     fi
 
+    # Internet connectivity check
+    if curl -sf --max-time 5 -o /dev/null https://www.google.com 2>/dev/null; then
+        internet_ok=true
+    fi
+
     if ! $dns_ok || ! $gateway_ok; then
         status="warning"; escalate warning
     fi
+    if ! $internet_ok; then
+        status="warning"; escalate warning
+    fi
 
-    jq -n --argjson dns "$dns_ok" --argjson gateway "$gateway_ok" --arg status "$status" \
-        '{"dns_resolution":$dns,"gateway_reachable":$gateway,"status":$status}'
+    # Check listening Docker service ports
+    local services="[]"
+    if command -v docker &>/dev/null; then
+        while IFS=$'\t' read -r name ports; do
+            [[ -z "$ports" ]] && continue
+            # Extract host-bound ports (0.0.0.0:PORT->)
+            while [[ "$ports" =~ 0\.0\.0\.0:([0-9]+)-\> ]]; do
+                local port="${BASH_REMATCH[1]}"
+                ports="${ports#*${BASH_REMATCH[0]}}"
+                local port_ok=false svc_status="ok"
+                if timeout 3 bash -c "echo >/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+                    port_ok=true
+                else
+                    svc_status="warning"; escalate warning
+                fi
+                services=$(echo "$services" | jq \
+                    --arg name "$name" --argjson port "$port" \
+                    --argjson reachable "$port_ok" --arg status "$svc_status" \
+                    '. + [{"container":$name,"port":$port,"reachable":$reachable,"status":$status}]')
+            done
+        done < <(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null)
+    fi
+
+    jq -n --argjson dns "$dns_ok" --argjson gateway "$gateway_ok" \
+        --argjson internet "$internet_ok" --argjson services "$services" \
+        --arg status "$status" \
+        '{"dns_resolution":$dns,"gateway_reachable":$gateway,"internet":$internet,"services":$services,"status":$status}'
 }
 
 check_logs() {
