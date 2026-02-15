@@ -21,13 +21,15 @@ curl -fsSL https://raw.githubusercontent.com/wickkit/homelab-healthcheck/main/in
 | Check | Details | Warning | Critical |
 |-------|---------|---------|----------|
 | **Disk Space** | All mounted filesystems | ≥80% used | ≥90% used |
-| **SMART Health** | Drive self-assessment via `smartctl` | — | Any failing drive |
-| **Docker Containers** | Status, restart counts, health | Restarting/unhealthy containers | — |
+| **Disk Trends** | Projects days until full from 7-day history | <30 days to full | <14 days to full |
+| **SMART Health** | Drive health, temp, reallocated/pending sectors, model, serial, power-on hours | Reallocated/pending sectors > 0, temp ≥ 55°C | SMART test failing |
+| **Docker** | Container status, health, restart counts, images (via `docker inspect`) | Stopped/unhealthy/restarting containers | — |
 | **CPU / Memory / Swap** | Load averages, usage percentages | Load > cores, mem > 85%, swap > 50% | Mem > 95% |
 | **Security Updates** | Pending apt packages | Any pending | Security updates pending |
 | **Uptime & Load** | System uptime, 1/5/15 min load | — | — |
 | **ZFS / RAID** | Pool health (skipped if absent) | Degraded | Faulted |
-| **Network** | DNS resolution + gateway ping | Any failure | — |
+| **Network** | DNS, gateway, internet connectivity + Docker service port checks | Any failure | — |
+| **TLS Certificates** | Auto-discovers from Traefik or manual config | <14 days to expiry | <7 days to expiry |
 | **System Logs** | Critical/emergency entries since last run | Any critical entries | Any emergency entries |
 
 ## How It Works
@@ -65,18 +67,41 @@ The top-level `status` field is the worst status across all checks:
 - **`warning`** — something needs attention soon
 - **`critical`** — something needs attention now
 
-## Customizing Thresholds
+## Configuration
 
-Edit the configuration section at the top of `healthcheck.sh`:
+All thresholds are configurable via `/opt/homelab-healthcheck/config.env`. A default config is created on install. See `config.env.example` for all options:
 
 ```bash
-DISK_WARN_PCT=80        # Disk usage warning threshold
-DISK_CRIT_PCT=90        # Disk usage critical threshold
-MEM_WARN_PCT=85         # Memory warning threshold
-MEM_CRIT_PCT=95         # Memory critical threshold
-SWAP_WARN_PCT=50        # Swap warning threshold
-LOAD_WARN_MULTIPLIER=1  # Warn if load > (cores × multiplier)
+# Disk thresholds (percent)
+DISK_WARN_PCT=80
+DISK_CRIT_PCT=90
+
+# Memory / swap thresholds (percent)
+MEM_WARN_PCT=85
+MEM_CRIT_PCT=95
+SWAP_WARN_PCT=50
+
+# CPU load warning multiplier (warn if 5m load > cores × multiplier)
+LOAD_WARN_MULTIPLIER=1
+
+# Docker restart count warning threshold
+DOCKER_RESTART_WARN=3
+
+# Certificate expiry thresholds (days)
+CERT_WARN_DAYS=14
+CERT_CRIT_DAYS=7
+
+# Domains to check (auto-discovers from Traefik if empty)
+CERT_DOMAINS=""
 ```
+
+## Historical Data
+
+Each run saves its JSON output to `/var/lib/homelab-healthcheck/history/YYYY-MM-DD.json`. History is automatically pruned after 90 days.
+
+This enables:
+- **Disk trend detection** — calculates daily growth rate from the last 7 days and projects when filesystems will fill
+- **SMART tracking** — monitor temperature and sector health over time
 
 ## Uninstalling
 
